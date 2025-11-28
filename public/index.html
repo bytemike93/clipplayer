@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>Clip Player</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root{
+      --hud-height:120px;
+      --hud-glass:rgba(15,19,30,.65);
+      --accent1:#a855f7; --accent2:#22d3ee;
+      --banner-offset-x: 150px;
+    }
+    html,body{margin:0;padding:0;height:100%;overflow:hidden;background:transparent}
+    body{position:relative;min-height:100vh;font-family:"Exo 2",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    #clip-container{position:absolute;inset:0;background:transparent}
+    #hud{
+      position:absolute;left:0;right:0;top:0;height:var(--hud-height);
+      pointer-events:none;z-index:2;display:grid;place-items:center;backdrop-filter:blur(8px);
+    }
+    #banner{
+      display:inline-flex;align-items:center;gap:18px;
+      padding:18px 28px;border-radius:9999px;color:#fff;
+      background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02)),var(--hud-glass);
+      box-shadow:0 12px 30px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.06);
+      transform: translateX(var(--banner-offset-x)) translateY(-14px) scale(.98);
+      opacity:0;transition:opacity .45s ease, transform .45s ease;max-width:min(92vw,1200px)
+    }
+    #banner.show{opacity:1;transform: translateX(var(--banner-offset-x)) translateY(0) scale(1)}
+    #banner img{width:56px;height:56px;filter:drop-shadow(0 4px 10px rgba(0,0,0,.4))}
+    #banner-text{font-weight:800;font-size:1.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60vw}
+    #shoutout-label{
+      position:absolute;left:100px;top:42px;background:linear-gradient(90deg,var(--accent1),var(--accent2));
+      color:#0b0f19;font-weight:800;font-size:1rem;letter-spacing:.3px;padding:8px 14px;border-radius:10px;
+      box-shadow:0 8px 20px rgba(0,0,0,.4);pointer-events:none;opacity:0;transform:translateY(-10px) scale(.98);
+      transition:opacity .35s ease, transform .35s ease
+    }
+    #shoutout-label.show{opacity:1;transform:translateY(0) scale(2)}
+    #progress{position:relative;height:4px;border-radius:999px;background:rgba(255,255,255,.16);overflow:hidden;margin-left:auto;min-width:clamp(140px,24vw,320px);box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+    #progress .bar{height:100%;width:0%;background:linear-gradient(90deg,var(--accent1),var(--accent2));box-shadow:0 0 18px rgba(168,85,247,.45)}
+    @keyframes grow{from{width:0%}to{width:100%}}
+    #frame-wrap{position:absolute;left:0;right:0;bottom:0;top:var(--hud-height);min-width:400px;min-height:300px;z-index:1;background:transparent}
+    iframe{position:absolute;inset:0;width:100%;height:100%;border:none;background:#000}
+  </style>
+</head>
+<body>
+  <div id="clip-container">
+    <div id="hud">
+      <div id="banner">
+        <img src="https://static.twitchcdn.net/assets/favicon-32-e29e246c157142c94346.png" alt="Twitch">
+        <span id="banner-text">twitch.tv/…</span>
+        <div id="progress" aria-hidden="true"><div class="bar"></div></div>
+      </div>
+      <div id="shoutout-label">🎉 SHOUTOUT</div>
+    </div>
+    <div id="frame-wrap"></div>
+  </div>
+
+  <script>
+    // --- URL-Parameter ---
+    const qs  = new URLSearchParams(location.search);
+    const uid = qs.get('uid') || '';
+    if (!uid) console.error('Kein uid in der URL! Beispiel: ?uid=123');
+
+    // DOM
+    const frameWrap   = document.getElementById('frame-wrap');
+    const banner      = document.getElementById('banner');
+    const shoutout    = document.getElementById('shoutout-label');
+    const bannerText  = document.getElementById('banner-text');
+    const progressBar = document.querySelector('#progress .bar');
+
+    const PARENT = location.hostname.split(':')[0];
+    const raf = () => new Promise(r => requestAnimationFrame(r));
+    let hideTimeout = null;
+
+    function extractClipSlug(raw){
+      if(!raw) return null;
+      try{
+        const url = new URL(raw);
+        if(/^(?:www\.)?clips\.twitch\.tv$/i.test(url.hostname)){
+          const segs = url.pathname.split('/').filter(Boolean);
+          if(segs[0] && segs[0] !== 'embed') return segs[0];
+          const q = url.searchParams.get('clip'); if(q) return q;
+        }
+        if(/^(?:www\.)?twitch\.tv$/i.test(url.hostname)){
+          const parts = url.pathname.split('/').filter(Boolean);
+          const i = parts.indexOf('clip'); if(i>=0 && parts[i+1]) return parts[i+1];
+          const q = url.searchParams.get('clip'); if(q) return q;
+        }
+      }catch{}
+      const m = String(raw).match(/(?:clips\.twitch\.tv\/|twitch\.tv\/(?:[^/]+\/)?clip\/|[?&]clip=)([A-Za-z0-9-]+)/i);
+      return m ? m[1] : null;
+    }
+
+    function buildEmbedUrl(slug){
+      const u = new URL('https://clips.twitch.tv/embed');
+      u.searchParams.set('clip', slug);
+      u.searchParams.set('parent', PARENT);
+      u.searchParams.set('autoplay', 'true');
+      u.searchParams.set('muted',   'true');
+      return u.toString();
+    }
+
+    function showHud(){ banner.classList.add('show'); shoutout.classList.add('show'); }
+    function hideHud(){ banner.classList.remove('show'); shoutout.classList.remove('show'); }
+    function startProgress(sec){
+      progressBar.style.animation='none'; void progressBar.offsetWidth;
+      progressBar.style.animation=`grow ${Math.max(.1,sec)}s linear forwards`;
+    }
+    function resetProgress(){ progressBar.style.animation='none'; progressBar.style.width='0%'; }
+    function destroyIframe(){ while(frameWrap.firstChild) frameWrap.removeChild(frameWrap.firstChild); }
+
+    async function playClip(slug, durationSec){
+      hideHud(); resetProgress();
+      destroyIframe();
+      const iframe = document.createElement('iframe');
+      iframe.setAttribute('allow','autoplay; fullscreen; picture-in-picture');
+      iframe.setAttribute('allowfullscreen','true');
+      iframe.setAttribute('playsinline','true');
+      iframe.setAttribute('title','Twitch Clip');
+      frameWrap.appendChild(iframe);
+      await raf();
+      iframe.src = buildEmbedUrl(slug);
+      setTimeout(showHud, 300);
+      startProgress(durationSec);
+    }
+
+    function hideOverlay(){
+      hideHud();
+      resetProgress();
+      destroyIframe();
+    }
+
+    if(!window._clipEventRegistered){
+      window.addEventListener('message',(event)=>{
+        try{
+          if(typeof event.data === 'string'){
+            const msg = JSON.parse(event.data);
+            if(msg?.event === 'ENDED'){
+              hideOverlay();
+              hideTimeout = null;
+            }
+          }
+        }catch{}
+      });
+      window._clipEventRegistered = true;
+    }
+
+    // --- WS ohne Signatur ---
+    (async () => {
+      try {
+        const WS_PROTO = location.protocol === 'https:' ? 'wss' : 'ws';
+        const ws = new WebSocket(`${WS_PROTO}://${location.host}/?uid=${encodeURIComponent(uid)}`);
+        window._clip_ws = ws;
+
+        ws.onopen  = () => console.log('WS connected for uid', uid);
+        ws.onclose = () => console.log('WS closed');
+        ws.onerror = (e) => console.warn('WS error', e);
+
+        ws.onmessage = async (event) => {
+          const data = JSON.parse(event.data || '{}');
+          const slug = extractClipSlug(data.clipUrl);
+          if(!slug){ console.error('Ungültige Clip-URL:', data.clipUrl); return; }
+
+          const dur = Math.max(1, parseFloat(data.duration || 30));
+          bannerText.textContent = `twitch.tv/${data.streamer || '???'}`;
+
+          await playClip(slug, dur);
+
+          if(hideTimeout) clearTimeout(hideTimeout);
+          hideTimeout = setTimeout(()=>{
+            console.warn('Sicherheits-Timeout – Clip wird ausgeblendet.');
+            hideOverlay();
+            hideTimeout = null;
+          }, dur*1000 + 1200);
+        };
+      } catch (err) {
+        console.error('Start fehlgeschlagen:', err.message || err);
+      }
+    })();
+  </script>
+</body>
+</html>
