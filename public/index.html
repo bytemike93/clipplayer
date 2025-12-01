@@ -62,6 +62,8 @@
     const qs  = new URLSearchParams(location.search);
     const uid = qs.get('uid') || '';
     if (!uid) console.error('Kein uid in der URL! Beispiel: ?uid=123');
+    const CLIP_DURATION_MIN = 1;
+    const CLIP_DURATION_MAX = 120;
 
     // DOM
     const frameWrap   = document.getElementById('frame-wrap');
@@ -131,6 +133,11 @@
       resetProgress();
       destroyIframe();
     }
+    function clampDuration(sec){
+      const n = Number(sec);
+      if (!Number.isFinite(n)) return CLIP_DURATION_MIN;
+      return Math.min(CLIP_DURATION_MAX, Math.max(CLIP_DURATION_MIN, n));
+    }
 
     if(!window._clipEventRegistered){
       window.addEventListener('message',(event)=>{
@@ -159,11 +166,19 @@
         ws.onerror = (e) => console.warn('WS error', e);
 
         ws.onmessage = async (event) => {
-          const data = JSON.parse(event.data || '{}');
+          let data = null;
+          try {
+            data = JSON.parse(event.data || '{}');
+          } catch (err) {
+            console.warn('Ungültige WS-Nachricht (kein JSON)', err);
+            return;
+          }
+          if (!data || typeof data !== 'object') return;
+
           const slug = extractClipSlug(data.clipUrl);
           if(!slug){ console.error('Ungültige Clip-URL:', data.clipUrl); return; }
 
-          const dur = Math.max(1, parseFloat(data.duration || 30));
+          const dur = clampDuration(data.duration || 30);
           bannerText.textContent = `twitch.tv/${data.streamer || '???'}`;
 
           await playClip(slug, dur);

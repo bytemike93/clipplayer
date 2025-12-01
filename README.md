@@ -19,9 +19,12 @@ node server.js        # starts HTTP + WS on PORT (default 3003)
 | Variable              | Description |
 | --------------------- | ----------- |
 | `PORT`                | HTTP/WS port (default 3003) |
-| `WS_SECRET`           | Shared secret for signed WS connections (`sig` query) |
-| `ALLOW_WS_NO_SIG`     | Allow WS connections without `sig` when `WS_SECRET` is set (`true`/`false`, default `true`) |
-| `OVERLAY_CLIP_SECRET` | Bearer token required for `POST /api/clip` (empty disables auth) |
+| `WS_SECRET`           | **Required** shared secret for signed WS connections (`sig` query) |
+| `ALLOW_WS_NO_SIG`     | Allow WS connections without `sig` (`true`/`false`, default `false`) – nur für Dev nutzen |
+| `WS_ALLOWED_ORIGINS`  | Comma-separated Origin-Whitelist for WS handshakes (optional; empty = allow all) |
+| `OVERLAY_CLIP_SECRET` | **Required** Bearer token required for `POST /api/clip` & `/debug/clients` |
+| `CLIP_DURATION_MIN`   | Minimal duration (seconds) accepted from API (default 1) |
+| `CLIP_DURATION_MAX`   | Maximal duration (seconds) accepted from API (default 120) |
 | `TWITCH_CLIENT_ID`    | Optional: Twitch OAuth client id (used in `config.js`) |
 | `TWITCH_CLIENT_SECRET`| Optional: Twitch OAuth client secret |
 | `TWITCH_REDIRECT_URI` | Optional: Twitch redirect URI |
