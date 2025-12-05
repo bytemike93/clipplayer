@@ -64,6 +64,7 @@
     if (!uid) console.error('Kein uid in der URL! Beispiel: ?uid=123');
     const CLIP_DURATION_MIN = 1;
     const CLIP_DURATION_MAX = 120;
+    const PLAYBACK_GUARD_MS = 6500; // wie lange wir auf „start playing“ warten
 
     // DOM
     const frameWrap   = document.getElementById('frame-wrap');
@@ -75,6 +76,8 @@
     const PARENT = location.hostname.split(':')[0];
     const raf = () => new Promise(r => requestAnimationFrame(r));
     let hideTimeout = null;
+    let playbackGuard = null;
+    let playbackStarted = false;
 
     function extractClipSlug(raw){
       if(!raw) return null;
@@ -95,12 +98,12 @@
       return m ? m[1] : null;
     }
 
-    function buildEmbedUrl(slug){
+    function buildEmbedUrl(slug, opts = {}){
       const u = new URL('https://clips.twitch.tv/embed');
       u.searchParams.set('clip', slug);
       u.searchParams.set('parent', PARENT);
       u.searchParams.set('autoplay', 'true');
-      u.searchParams.set('muted',   'true');
+      u.searchParams.set('muted',   String(opts.muted ?? false));
       return u.toString();
     }
 
@@ -112,10 +115,14 @@
     }
     function resetProgress(){ progressBar.style.animation='none'; progressBar.style.width='0%'; }
     function destroyIframe(){ while(frameWrap.firstChild) frameWrap.removeChild(frameWrap.firstChild); }
+    function clearGuards(){ if(playbackGuard) clearTimeout(playbackGuard); playbackGuard = null; }
+    function markPlaying(){ playbackStarted = true; clearGuards(); }
 
-    async function playClip(slug, durationSec){
-      hideHud(); resetProgress();
+    async function playClip(slug, durationSec, opts = {}){
+      hideHud(); resetProgress(); clearGuards();
       destroyIframe();
+      if(hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null; }
+      playbackStarted = false;
       const iframe = document.createElement('iframe');
       iframe.setAttribute('allow','autoplay; fullscreen; picture-in-picture');
       iframe.setAttribute('allowfullscreen','true');
@@ -123,15 +130,35 @@
       iframe.setAttribute('title','Twitch Clip');
       frameWrap.appendChild(iframe);
       await raf();
-      iframe.src = buildEmbedUrl(slug);
+      iframe.addEventListener('load', () => markPlaying(), { once: true });
+      iframe.src = buildEmbedUrl(slug, opts);
       setTimeout(showHud, 300);
       startProgress(durationSec);
+      hideTimeout = setTimeout(()=>{
+        console.warn('Sicherheits-Timeout – Clip wird ausgeblendet.');
+        hideOverlay();
+      }, durationSec*1000 + 1200);
+
+      // Wenn binnen PLAYBACK_GUARD_MS kein Play-State kommt, einmal stumm neu laden,
+      // danach abbrechen damit kein 30s-Black-Screen bleibt.
+      playbackGuard = setTimeout(() => {
+        if (playbackStarted) return;
+        if (!opts.muted) {
+          console.warn('Autoplay evtl. geblockt – zweiter Versuch mit muted=true');
+          playClip(slug, durationSec, { ...opts, muted: true });
+          return;
+        }
+        console.warn('Playback startete nicht – blende Overlay aus.');
+        hideOverlay();
+      }, PLAYBACK_GUARD_MS);
     }
 
     function hideOverlay(){
       hideHud();
       resetProgress();
       destroyIframe();
+      clearGuards();
+      if (hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null; }
     }
     function clampDuration(sec){
       const n = Number(sec);
@@ -142,12 +169,19 @@
     if(!window._clipEventRegistered){
       window.addEventListener('message',(event)=>{
         try{
-          if(typeof event.data === 'string'){
-            const msg = JSON.parse(event.data);
-            if(msg?.event === 'ENDED'){
-              hideOverlay();
-              hideTimeout = null;
-            }
+          const raw = event.data;
+          const msg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          const ev = msg?.event || msg?.type || msg?.data?.event;
+
+          if(ev === 'ENDED'){
+            hideOverlay();
+            hideTimeout = null;
+          }
+          if(ev && String(ev).toUpperCase().includes('PLAY')){
+            markPlaying();
+          }
+          if(ev && String(ev).toUpperCase().includes('READY')){
+            // Player meldet sich, aber noch kein Play – Guard bleibt aktiv.
           }
         }catch{}
       });
@@ -179,16 +213,12 @@
           if(!slug){ console.error('Ungültige Clip-URL:', data.clipUrl); return; }
 
           const dur = clampDuration(data.duration || 30);
+          const clipLen = Number.isFinite(Number(data.clipDurationSec)) ? Number(data.clipDurationSec) : null;
+          const effectiveDur = clipLen ? clampDuration(Math.min(dur, clipLen)) : dur;
           bannerText.textContent = `twitch.tv/${data.streamer || '???'}`;
 
-          await playClip(slug, dur);
-
-          if(hideTimeout) clearTimeout(hideTimeout);
-          hideTimeout = setTimeout(()=>{
-            console.warn('Sicherheits-Timeout – Clip wird ausgeblendet.');
-            hideOverlay();
-            hideTimeout = null;
-          }, dur*1000 + 1200);
+          const initialMuted = data.muted === true ? true : false;
+          await playClip(slug, effectiveDur, { muted: initialMuted });
         };
       } catch (err) {
         console.error('Start fehlgeschlagen:', err.message || err);
