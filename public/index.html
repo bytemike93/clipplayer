@@ -61,6 +61,7 @@
     // --- URL-Parameter ---
     const qs  = new URLSearchParams(location.search);
     const uid = qs.get('uid') || '';
+    const sig = qs.get('sig') || '';
     if (!uid) console.error('Kein uid in der URL! Beispiel: ?uid=123');
     const CLIP_DURATION_MIN = 1;
     const CLIP_DURATION_MAX = 120;
@@ -192,7 +193,10 @@
     (async () => {
       try {
         const WS_PROTO = location.protocol === 'https:' ? 'wss' : 'ws';
-        const ws = new WebSocket(`${WS_PROTO}://${location.host}/?uid=${encodeURIComponent(uid)}`);
+        const wsParams = new URLSearchParams();
+        wsParams.set('uid', uid);
+        if (sig) wsParams.set('sig', sig);
+        const ws = new WebSocket(`${WS_PROTO}://${location.host}/?${wsParams.toString()}`);
         window._clip_ws = ws;
 
         ws.onopen  = () => console.log('WS connected for uid', uid);
